@@ -12,10 +12,13 @@ class TurnoverRequirementHandler {
      * @param depositId Unique ID of the deposit event.
      * @param amount The deposit amount.
      */
+
+    //personally I would use say depositId should be transactionId
     fun deposit(userId: UUID, depositId: UUID, amount: Long) {
-        map.getOrPut(userId) {
+        val user = map.getOrPut(userId) {
             User(userId, mutableListOf(), depositAmountToTurnOver = amount)
-        }.addTransaction(depositId, amount, TransactionType.D)
+        }
+        user.addTransaction(depositId, amount, TransactionType.D, TransactionState.PENDING_TURNOVER, depositId, amount)
     }
 
     /**
@@ -25,11 +28,21 @@ class TurnoverRequirementHandler {
      * @param amount The turnover amount.
      */
     fun turnover(userId: UUID, eventId: UUID, amount: Long) {
-        val currentAmountToTurnOver = map[userId]?.depositAmountToTurnOver ?: 0
-        val depositAmountToTurnOver = max(0, amount - currentAmountToTurnOver)
-        map.getOrPut(userId) {
-            User(userId, mutableListOf(), depositAmountToTurnOver = depositAmountToTurnOver)
-        }.addTransaction(eventId, amount, TransactionType.T, transactionState = TransactionState.COMPLETE)
+        val user = map[userId]
+        val confirmOriginalDeposit = user?.transactions?.firstOrNull {
+            it.eventId == eventId && it.transactionType == TransactionType.D
+        }
+        val turnoverAmountRemaining = max(0, confirmOriginalDeposit!!.turnoverAmountRemaining - amount)
+
+        if (confirmOriginalDeposit.transactionType == TransactionType.D) {
+            val newTransactionState = if (turnoverAmountRemaining > 0) TransactionState.PENDING_TURNOVER else TransactionState.COMPLETED
+            val depositTransaction = user.transactions.find { it.transactionType == TransactionType.D && it.eventId == eventId }!!
+            depositTransaction.turnoverAmountRemaining = turnoverAmountRemaining
+            depositTransaction.transactionState = newTransactionState
+        }
+        val turnover = Transaction(UUID.randomUUID(), eventId , amount, TransactionType.T, TransactionState.COMPLETED,
+            eventId, 0 )
+        user.transactions.add(turnover)
     }
 
     /**
@@ -37,13 +50,8 @@ class TurnoverRequirementHandler {
      * @param userId ID of the user whose turnover is being reversed.
      * @param eventId Unique ID of the turnover event to reverse.
      */
-    fun reverseTurnover(userId: UUID, eventId: UUID) {
-        // Implementation goes here
-        val user = map[userId]
-        val turnoverToReverse = user?.transactions?.firstOrNull {
-            eventId == it.depositId && it.transactionType == TransactionType.T
-        }?.copy(transactionState = TransactionState.VOID)
-        // i guess if its linked to a direct turn over we need to see that
+    fun reverseTurnover(userId: UUID, eventId: UUID) = {
+        val turnoverToReverse = map[userId]?.transactions.fi
     }
 
     /**
@@ -51,8 +59,8 @@ class TurnoverRequirementHandler {
      * @param userId ID of the user whose deposit is being reversed.
      * @param depositId Unique ID of the deposit event to reverse.
      */
-    fun reverseDeposit(userId: UUID, depositId: UUID) {
-        // Implementation goes here
+    fun reverseDeposit(userId: UUID, transactionId: UUID) {
+
     }
 
     /**
@@ -63,22 +71,28 @@ class TurnoverRequirementHandler {
      */
     fun getWithdrawableAmount(userId: UUID, userBalance: Long): Long {
         // Implementation goes here
-        return 0L // Placeholder return
+        val user = map[userId] ?: throw IllegalArgumentException("Unable to find user")
+
+        return userBalance - user.depositAmountToTurnOver // Placeholder return
     }
 
     data class User(val userId: UUID,
                     val transactions: MutableList<Transaction>,
-                    val depositAmountToTurnOver: Long = 0) {
+                    var depositAmountToTurnOver: Long = 0) {
 
-        fun addTransaction( depositId: UUID, amount: Long, transactionType: TransactionType, transactionState: TransactionState) {
+        fun addTransaction( depositId: UUID, amount: Long, transactionType: TransactionType, transactionState: TransactionState, eventId: UUID, turnoverAmountRemaining: Long) {
             val amountToAdd = max(0, amount)
-            val transaction = Transaction(amountToAdd, depositId, transactionType, transactionState)
+            val transactionId = UUID.randomUUID()
+            val transaction = Transaction(transactionId, depositId, amountToAdd, transactionType, transactionState, eventId, turnoverAmountRemaining)
             transactions.add(transaction)
         }
     }
 
-
-    data class Transaction(val amount: Long, val depositId: UUID, val transactionType: TransactionType, val transactionState: TransactionState)
+    //probably should have transaction interface that DepositTransaction & TurnoverTransaction implement... but we will keep it simple.
+    data class Transaction(val transactionId: UUID = UUID.randomUUID(), val depositId: UUID, var amount: Long,
+                           val transactionType: TransactionType, var transactionState: TransactionState, val eventId: UUID,
+                           var turnoverAmountRemaining: Long
+        )
 
     enum class TransactionType {
         T,
@@ -86,8 +100,10 @@ class TurnoverRequirementHandler {
     }
 
     enum class TransactionState {
-        VOID,
-        COMPLETE
+        REVERSED,
+        PENDING_TURNOVER,
+        COMPLETED
         // could be pending etc.
     }
+
 }
